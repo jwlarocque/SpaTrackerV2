@@ -39,9 +39,12 @@ if __name__ == "__main__":
     fps = int(args.fps)
     mask_dir = args.data_dir + f"/{args.video_name}.png"
     
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+
     vggt4track_model = VGGT4Track.from_pretrained("Yuxihenry/SpatialTrackerV2_Front")
     vggt4track_model.eval()
-    vggt4track_model = vggt4track_model.to("cuda")
+    vggt4track_model = vggt4track_model.to(device)
 
     if args.data_type == "RGBD":
         npz_dir = args.data_dir + f"/{args.video_name}.npz"
@@ -66,11 +69,11 @@ if __name__ == "__main__":
         # process the image tensor
         video_tensor = preprocess_image(video_tensor)[None]
         with torch.no_grad():
-            with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+            # with torch.cuda.amp.autocast("cpu", dtype=torch.float16):
                 # Predict attributes including cameras, depth maps, and point maps.
-                predictions = vggt4track_model(video_tensor.cuda()/255)
-                extrinsic, intrinsic = predictions["poses_pred"], predictions["intrs"]
-                depth_map, depth_conf = predictions["points_map"][..., 2], predictions["unc_metric"]
+            predictions = vggt4track_model((video_tensor/255).to(device))
+            extrinsic, intrinsic = predictions["poses_pred"], predictions["intrs"]
+            depth_map, depth_conf = predictions["points_map"][..., 2], predictions["unc_metric"]
         
         depth_tensor = depth_map.squeeze().cpu().numpy()
         extrs = np.eye(4)[None].repeat(len(depth_tensor), axis=0)
@@ -110,7 +113,7 @@ if __name__ == "__main__":
     model.spatrack.track_num = args.vo_points
     
     model.eval()
-    model.to("cuda")
+    model.to(device)
     viser = Visualizer(save_dir=out_dir, grayscale=True, 
                      fps=10, pad_value=0, tracks_leave_trace=5)
     
@@ -134,51 +137,51 @@ if __name__ == "__main__":
     query_xyt = torch.cat([torch.zeros_like(grid_pts[:, :, :1]), grid_pts], dim=2)[0].numpy()
 
     # Run model inference
-    with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-        (
-            c2w_traj, intrs, point_map, conf_depth,
-            track3d_pred, track2d_pred, vis_pred, conf_pred, video
-        ) = model.forward(video_tensor, depth=depth_tensor,
-                            intrs=intrs, extrs=extrs, 
-                            queries=query_xyt,
-                            fps=1, full_point=False, iters_track=4,
-                            query_no_BA=True, fixed_cam=False, stage=1, unc_metric=unc_metric,
-                            support_frame=len(video_tensor)-1, replace_ratio=0.2) 
-        
-        # resize the results to avoid too large I/O Burden
-        # depth and image, the maximum side is 336
-        max_size = 336
-        h, w = video.shape[2:]
-        scale = min(max_size / h, max_size / w)
-        if scale < 1:
-            new_h, new_w = int(h * scale), int(w * scale)
-            video = T.Resize((new_h, new_w))(video)
-            video_tensor = T.Resize((new_h, new_w))(video_tensor)
-            point_map = T.Resize((new_h, new_w))(point_map)
-            conf_depth = T.Resize((new_h, new_w))(conf_depth)
-            track2d_pred[...,:2] = track2d_pred[...,:2] * scale
-            intrs[:,:2,:] = intrs[:,:2,:] * scale
-            if depth_tensor is not None:
-                if isinstance(depth_tensor, torch.Tensor):
-                    depth_tensor = T.Resize((new_h, new_w))(depth_tensor)
-                else:
-                    depth_tensor = T.Resize((new_h, new_w))(torch.from_numpy(depth_tensor))
+    # with torch.amp.autocast(device_type="cpu", dtype=torch.float16):
+    (
+        c2w_traj, intrs, point_map, conf_depth,
+        track3d_pred, track2d_pred, vis_pred, conf_pred, video
+    ) = model.forward(video_tensor.to(device), depth=depth_tensor,
+                        intrs=intrs, extrs=extrs, 
+                        queries=query_xyt,
+                        fps=1, full_point=False, iters_track=4,
+                        query_no_BA=True, fixed_cam=False, stage=1, unc_metric=unc_metric,
+                        support_frame=len(video_tensor)-1, replace_ratio=0.2) 
+    
+    # resize the results to avoid too large I/O Burden
+    # depth and image, the maximum side is 336
+    max_size = 336
+    h, w = video.shape[2:]
+    scale = min(max_size / h, max_size / w)
+    if scale < 1:
+        new_h, new_w = int(h * scale), int(w * scale)
+        video = T.Resize((new_h, new_w))(video)
+        video_tensor = T.Resize((new_h, new_w))(video_tensor)
+        point_map = T.Resize((new_h, new_w))(point_map)
+        conf_depth = T.Resize((new_h, new_w))(conf_depth)
+        track2d_pred[...,:2] = track2d_pred[...,:2] * scale
+        intrs[:,:2,:] = intrs[:,:2,:] * scale
+        if depth_tensor is not None:
+            if isinstance(depth_tensor, torch.Tensor):
+                depth_tensor = T.Resize((new_h, new_w))(depth_tensor)
+            else:
+                depth_tensor = T.Resize((new_h, new_w))(torch.from_numpy(depth_tensor))
 
-        if viz:
-            viser.visualize(video=video[None],
-                                tracks=track2d_pred[None][...,:2],
-                                visibility=vis_pred[None],filename="test")
+    if viz:
+        viser.visualize(video=video[None],
+                            tracks=track2d_pred[None][...,:2],
+                            visibility=vis_pred[None],filename="test")
 
-        # save as the tapip3d format   
-        data_npz_load["coords"] = (torch.einsum("tij,tnj->tni", c2w_traj[:,:3,:3], track3d_pred[:,:,:3].cpu()) + c2w_traj[:,:3,3][:,None,:]).numpy()
-        data_npz_load["extrinsics"] = torch.inverse(c2w_traj).cpu().numpy()
-        data_npz_load["intrinsics"] = intrs.cpu().numpy()
-        depth_save = point_map[:,2,...]
-        depth_save[conf_depth<0.5] = 0
-        data_npz_load["depths"] = depth_save.cpu().numpy()
-        data_npz_load["video"] = (video_tensor).cpu().numpy()/255
-        data_npz_load["visibs"] = vis_pred.cpu().numpy()
-        data_npz_load["unc_metric"] = conf_depth.cpu().numpy()
-        np.savez(os.path.join(out_dir, f'result.npz'), **data_npz_load)
+    # save as the tapip3d format   
+    data_npz_load["coords"] = (torch.einsum("tij,tnj->tni", c2w_traj[:,:3,:3], track3d_pred[:,:,:3].cpu()) + c2w_traj[:,:3,3][:,None,:]).numpy()
+    data_npz_load["extrinsics"] = torch.inverse(c2w_traj).cpu().numpy()
+    data_npz_load["intrinsics"] = intrs.cpu().numpy()
+    depth_save = point_map[:,2,...]
+    depth_save[conf_depth<0.5] = 0
+    data_npz_load["depths"] = depth_save.cpu().numpy()
+    data_npz_load["video"] = (video_tensor).cpu().numpy()/255
+    data_npz_load["visibs"] = vis_pred.cpu().numpy()
+    data_npz_load["unc_metric"] = conf_depth.cpu().numpy()
+    np.savez(os.path.join(out_dir, f'result.npz'), **data_npz_load)
 
-        print(f"Results saved to {out_dir}.\nTo visualize them with tapip3d, run: [bold yellow]python tapip3d_viz.py {out_dir}/result.npz[/bold yellow]")
+    print(f"Results saved to {out_dir}.\nTo visualize them with tapip3d, run: [bold yellow]python tapip3d_viz.py {out_dir}/result.npz[/bold yellow]")

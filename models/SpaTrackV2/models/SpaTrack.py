@@ -209,23 +209,24 @@ class SpaTrack2(nn.Module, PyTorchModelHubMixin):
         #TODO: Process each segment in parallel using torch.nn.DataParallel
         c2w_traj = torch.eye(4, 4)[None].repeat(T, 1, 1)
         intrs_out = torch.eye(3, 3)[None].repeat(T, 1, 1)
-        point_map = torch.zeros(T, 3, H, W).cuda()
-        unc_metric = torch.zeros(T, H, W).cuda()
+        device = video.device
+        point_map = torch.zeros(T, 3, H, W).to(device)
+        unc_metric = torch.zeros(T, H, W).to(device)
         # set the queries
         N, _ = queries.shape
-        track3d_pred = torch.zeros(T, N, 6).cuda()
-        track2d_pred = torch.zeros(T, N, 3).cuda()
-        vis_pred = torch.zeros(T, N, 1).cuda()
-        conf_pred = torch.zeros(T, N, 1).cuda()
-        dyn_preds = torch.zeros(T, N, 1).cuda()
+        track3d_pred = torch.zeros(T, N, 6).to(device)
+        track2d_pred = torch.zeros(T, N, 3).to(device)
+        vis_pred = torch.zeros(T, N, 1).to(device)
+        conf_pred = torch.zeros(T, N, 1).to(device)
+        dyn_preds = torch.zeros(T, N, 1).to(device)
         # sort the queries by time
         sorted_indices = np.argsort(queries[...,0])
         sorted_inv_indices = np.argsort(sorted_indices)
         sort_query = queries[sorted_indices]
-        sort_query = torch.from_numpy(sort_query).cuda()
+        sort_query = torch.from_numpy(sort_query).to(device)
         if queries_3d is not None:
             sort_query_3d = queries_3d[sorted_indices]
-            sort_query_3d = torch.from_numpy(sort_query_3d).cuda()
+            sort_query_3d = torch.from_numpy(sort_query_3d).to(device)
         
         queries_len = 0
         overlap_d = None
@@ -233,7 +234,7 @@ class SpaTrack2(nn.Module, PyTorchModelHubMixin):
         loss = 0.0
 
         for i in range(B):
-            segment = video_unf[i:i+1].cuda()
+            segment = video_unf[i:i+1].to(device)
             # Forward pass through model
             # detect the key points for each frames
                             

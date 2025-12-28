@@ -184,7 +184,7 @@ class TrackRefiner3D(CoTrackerThreeOffline):
         weight_final = (metric_unc) # * vis_est
 
 
-        with torch.amp.autocast(enabled=False, device_type='cuda'):
+        with torch.amp.autocast(enabled=False, device_type=cam_pts.device.type):
             if fixed_cam:
                 c2w_traj_init = self.c2w_est_curr
                 c2w_traj_glob = c2w_traj_init

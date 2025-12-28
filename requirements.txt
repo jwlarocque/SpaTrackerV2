@@ -23,7 +23,7 @@ git+https://github.com/EasternJournalist/utils3d.git@d3a577acf0a9ad7e513a1416449
 huggingface_hub
 pyceres==2.4
 kornia==0.8.1
-xformers==0.0.28
+# xformers==0.0.28
 timm
 PyJWT
 gdown
